@@ -135,17 +135,43 @@ export async function signIn(formData: FormData) {
   const { email, password } = parsed.data;
 
   const supabase = await createClient();
-  const { error } = await supabase.auth.signInWithPassword({
+  const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
     email,
     password,
   });
 
-  if (error) {
-    console.error("Sign-in Error:", error.message);
+  if (authError) {
+    console.error("Sign-in Error:", authError.message);
     return redirect(`/login?error=${encodeURIComponent("Credenciales inválidas. Por favor, intenta de nuevo.")}`);
   }
 
-  // Si el inicio de sesión es exitoso, revalidamos y redirigimos
+  if (!authData.user) {
+    // Esto no debería suceder si no hay error, pero es una buena práctica verificarlo.
+    console.error("Sign-in Error: User object is null after successful sign-in.");
+    return redirect(`/login?error=${encodeURIComponent("Ocurrió un error inesperado durante el inicio de sesión.")}`);
+  }
+
+  const userId = authData.user.id;
+
+  // Verificar si el perfil del usuario está completo en la tabla active_users
+  const { data: activeUser, error: activeUserError } = await supabase
+    .from('active_users')
+    .select('id')
+    .eq('id', userId)
+    .limit(1)
+    .single(); // Usamos single() ya que esperamos 0 o 1 fila
+
+  if (activeUserError || !activeUser) {
+    // Si hay un error consultando active_users o el usuario no se encuentra (perfil incompleto)
+    // redirigir a completar perfil.
+    // Podrías querer loggear activeUserError si existe, para depuración.
+    if (activeUserError && activeUserError.code !== 'PGRST116') { // PGRST116: 'No rows found'
+        console.error("Error querying active_users:", activeUserError.message);
+    }
+    return redirect('/completar-perfil');
+  }
+
+  // Si el inicio de sesión es exitoso y el perfil está completo, revalidamos y redirigimos
   revalidatePath('/', 'layout');
   redirect('/directorio');
 }
