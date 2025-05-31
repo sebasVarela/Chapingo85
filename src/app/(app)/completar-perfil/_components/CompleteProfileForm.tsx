@@ -1,7 +1,7 @@
 'use client';
 import type { User } from "@supabase/supabase-js";
-import { useState, useEffect } from "react";
-import { completeUserProfile } from "../actions";
+import { useState, useEffect, useRef } from "react";
+import { completeUserProfile, generatePresignedUrl } from "../actions";
 
 export default function CompleteProfileForm({ user }: { user: User }) {
   const metadata = user.user_metadata;
@@ -12,6 +12,13 @@ export default function CompleteProfileForm({ user }: { user: User }) {
   const [nickname, setNickname] = useState('');
   const [displayNamePreview, setDisplayNamePreview] = useState('');
 
+  // Estados para la subida de la foto
+  const [profilePhotoFile, setProfilePhotoFile] = useState<File | null>(null);
+  const [profilePhotoUrl, setProfilePhotoUrl] = useState<string>('');
+  const [uploadStatus, setUploadStatus] = useState<string>('');
+  const [uploadError, setUploadError] = useState<string>('');
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   useEffect(() => {
     let preview = `${firstName} ${lastName}`.trim();
     if (nickname.trim()) {
@@ -20,8 +27,80 @@ export default function CompleteProfileForm({ user }: { user: User }) {
     setDisplayNamePreview(preview);
   }, [firstName, lastName, nickname]);
 
+  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      setProfilePhotoFile(file);
+      setUploadStatus('Archivo seleccionado. Sube la foto.');
+      setUploadError('');
+      setProfilePhotoUrl(''); // Reseteamos la URL si se cambia el archivo
+    }
+  };
+
+  const handlePhotoUpload = async () => {
+    if (!profilePhotoFile) {
+      setUploadError('Por favor, selecciona un archivo primero.');
+      return;
+    }
+    if (!user || !user.id) {
+      setUploadError('Error de autenticación, no se puede subir la foto.');
+      return;
+    }
+
+    setUploadStatus('Generando permiso para subir...');
+    setUploadError('');
+
+    try {
+      const result = await generatePresignedUrl(user.id, profilePhotoFile.type, profilePhotoFile.name);
+
+      if (result.error || !result.success) {
+        setUploadError(result.error || 'No se pudo obtener la URL pre-firmada.');
+        setUploadStatus('');
+        return;
+      }
+
+      setUploadStatus('Permiso obtenido. Subiendo foto a R2...');
+      const { presignedUrl, publicImageUrl } = result.success;
+
+      const uploadResponse = await fetch(presignedUrl, {
+        method: 'PUT',
+        body: profilePhotoFile,
+        headers: {
+          'Content-Type': profilePhotoFile.type,
+        },
+      });
+
+      if (!uploadResponse.ok) {
+        throw new Error('Error al subir el archivo a R2. Estado: ' + uploadResponse.status);
+      }
+
+      setProfilePhotoUrl(publicImageUrl); // Guardamos la URL pública final
+      setUploadStatus('¡Foto subida con éxito!');
+      setUploadError('');
+      if (fileInputRef.current) {
+          fileInputRef.current.value = ""; // Resetea el input file
+      }
+      setProfilePhotoFile(null); // Limpia el archivo seleccionado
+
+    } catch (e: any) {
+      console.error("Error en la subida de foto:", e);
+      setUploadError(e.message || 'Ocurrió un error durante la subida.');
+      setUploadStatus('');
+    }
+  };
+  
+  // Necesitamos interceptar el envío del formulario para asegurar que la URL de la foto esté lista
+  async function clientSideSubmit(formData: FormData) {
+    if (!profilePhotoUrl) { // Si no hay URL, significa que no se subió foto o falló
+      setUploadError("Por favor, sube una foto de perfil o espera a que termine la subida.");
+      return; 
+    }
+    formData.set('profile_photo_url_from_client', profilePhotoUrl); // Añadimos la URL al FormData
+    await completeUserProfile(formData); // Llamamos a la server action original
+  }
+
   return (
-    <form action={completeUserProfile} className="space-y-6">
+    <form action={clientSideSubmit} className="space-y-6">
       {originalCsvFullName !== "No disponible" && (
         <div className="p-4 bg-black border border-blue-200 rounded-md">
           <p className="text-sm text-white">
@@ -73,11 +152,34 @@ export default function CompleteProfileForm({ user }: { user: User }) {
         </div>
       </div>
 
+      {/* SECCIÓN DE FOTO DE PERFIL MODIFICADA */}
       <div>
-        <label htmlFor="profile_photo" className="block text-sm font-medium text-gray-700">Foto de Perfil <span className="text-red-500">*</span></label>
-        <input type="file" name="profile_photo" id="profile_photo" required className="mt-1 block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-600 hover:file:bg-indigo-100"/>
-        <p className="text-xs text-gray-500 mt-1">La subida real a Cloudflare R2 se implementará después.</p>
+        <label htmlFor="profile_photo_input" className="block text-sm font-medium text-gray-700">Foto de Perfil <span className="text-red-500">*</span></label>
+        <div className="mt-1 flex items-center gap-4">
+          <input 
+            type="file" 
+            id="profile_photo_input" 
+            accept="image/png, image/jpeg, image/webp"
+            onChange={handleFileChange}
+            ref={fileInputRef} // Añadimos la referencia
+            className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-600 hover:file:bg-indigo-100"
+          />
+          {profilePhotoFile && (
+            <button 
+              type="button" 
+              onClick={handlePhotoUpload}
+              className="px-3 py-2 text-xs font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700"
+            >
+              Subir Foto
+            </button>
+          )}
+        </div>
+        {uploadStatus && <p className="text-sm text-green-600 mt-1">{uploadStatus}</p>}
+        {uploadError && <p className="text-sm text-red-600 mt-1">{uploadError}</p>}
+        {profilePhotoUrl && <img src={profilePhotoUrl} alt="Vista previa" className="mt-2 h-20 w-20 rounded-full object-cover" />}
       </div>
+      {/* Campo oculto para enviar la URL de la foto ya subida */}
+      <input type="hidden" name="profile_photo_url_from_client" value={profilePhotoUrl} />
 
       <div>
         <label htmlFor="about_me" className="block text-sm font-medium text-gray-700">Más sobre mí <span className="text-red-500">*</span></label>

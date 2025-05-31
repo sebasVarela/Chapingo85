@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { notFound } from "next/navigation";
+import Image from "next/image";
 
 type ProfilePageProps = {
   params: {
@@ -7,28 +8,38 @@ type ProfilePageProps = {
   };
 };
 
-export default async function ProfilePage({ params }: ProfilePageProps) {
+export default async function ProfilePage({ params }: { params: { id: string } }) {
+  const { id } = await params; 
+  const supabase = await createClient();
 
-    const { id } = await params; 
-    const supabase = await createClient();
+  const { data: user, error } = await supabase
+    .from('active_users')
+    .select('*')
+    .eq('id', id)
+    .single();
 
-    const { data: user, error } = await supabase
-        .from('active_users')
-        .select('*')
-        .eq('id', id)
-        .single();
+  if (error || !user) {
+    notFound(); // Muestra la página 404 si el usuario no se encuentra
+  }
 
-    if (error || !user) {
-        notFound(); // Muestra la página 404 si el usuario no se encuentra
-    }
+  const avatarSize = 160;
 
   return (
     <main className="min-h-screen bg-gray-100 p-4 sm:p-6 md:p-8">
       <div className="max-w-4xl mx-auto bg-white rounded-lg shadow-xl p-8">
         <div className="flex flex-col md:flex-row items-center md:items-start gap-8">
-          <div className="w-40 h-40 bg-gray-200 rounded-full flex-shrink-0 flex items-center justify-center">
-            {/* Aquí irá la foto de perfil */}
-            <span className="text-7xl">👤</span>
+          <div className="relative w-40 h-40 bg-gray-200 rounded-full flex-shrink-0 flex items-center justify-center overflow-hidden">
+            {user.profile_photo ? (
+              <Image 
+                src={user.profile_photo} 
+                alt={`Foto de perfil de ${user.full_name}`}
+                width={avatarSize}
+                height={avatarSize}
+                className="w-full h-full object-cover rounded-full"
+              />
+            ) : (
+              <span className="text-7xl text-gray-400">👤</span>
+            )}
           </div>
           <div className="flex-grow text-center md:text-left">
             <h1 className="text-3xl font-bold text-gray-900">{user.full_name}</h1>
